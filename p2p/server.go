@@ -1,83 +1,162 @@
-package server
+package p2p
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"net"
-	"sync"
+
+	logrus "github.com/sirupsen/logrus"
 )
 
-type Peer struct {
-	conn net.Conn
+type GameVariant uint8
+
+func (gv GameVariant) String() string {
+	switch gv {
+	case TexasHoldem:
+		return "TexasHoldem"
+	case Other:
+		return "Other"
+	default:
+		return "unknown"
+	}
 }
 
+const (
+	TexasHoldem GameVariant = iota
+	Other
+)
+
 type ServerConfig struct {
-	ListenAddr string
+	Version     string
+	ListenAddr  string
+	GameVariant GameVariant
 }
 
 type Server struct {
 	ServerConfig
 
-	listener net.Listener
-	mu       sync.RWMutex
-	peers    map[net.Addr]*Peer
-	addPeer  chan *Peer
+	transport *TCPTransport
+	peers     map[net.Addr]*Peer
+	addPeer   chan *Peer
+	delPeer   chan *Peer
+	msgCh     chan *Message
+
+	gameState *GameState
 }
 
 func NewServer(cfg ServerConfig) *Server {
-	return &Server{
+	s := &Server{
 		ServerConfig: cfg,
 		peers:        make(map[net.Addr]*Peer),
 		addPeer:      make(chan *Peer),
+		delPeer:      make(chan *Peer),
+		msgCh:        make(chan *Message),
+		gameState : NewGameState()
 	}
-}
 
-func (s *Server) Listen() error {
-	lstnr, err := net.Listen("tcp", s.ListenAddr)
-	if err != nil {
-		return err
-	}
-	s.listener = lstnr
-	return nil
+	tr := NewTCPTransport(s.ListenAddr)
+
+	s.transport = tr
+
+	tr.AddPeer = s.addPeer
+	tr.DelPeer = s.delPeer
+
+	return s
+
 }
 
 func (s *Server) Start() {
 	go s.loop()
 
-	if err := s.Listen(); err != nil {
-		panic(err)
+	logrus.WithFields(logrus.Fields{
+		"listenAddr": s.ListenAddr,
+		"variant":    s.GameVariant,
+	}).Info("server starts listening ")
+	s.transport.ListenAndAccept()
+}
+func (s *Server) Connect(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
 	}
-	s.acceptLoop()
+	peer := &Peer{
+		conn: conn,
+	}
+
+	s.addPeer <- peer
+	return peer.Send([]byte(s.Version))
+
 }
 
-func (s *Server) acceptLoop() {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			panic(err)
-		}
-
-		go handleConn(conn)
-	}
+type Handshake struct {
+	Version     string
+	GameVariant GameVariant
 }
 
-func handleConn(conn net.Conn) {
-	buf := make([]byte, 1024)
-	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			break
-		}
-		fmt.Println(string(buf[:n]))
+func (s *Server) handshake(p *Peer) error {
+	hs := &Handshake{}
+	if err := gob.NewDecoder(p.conn).Decode(hs); err != nil {
+		return err
 	}
+	if s.GameVariant != hs.GameVariant {
+		return fmt.Errorf("invalid game variant %s", hs.GameVariant)
+	}
+	if s.Version != hs.Version {
+		return fmt.Errorf("invalid version %s", hs.Version)
+	}
+	logrus.WithFields(logrus.Fields{
+		"peer":         p.conn.RemoteAddr(),
+		"version":      hs.Version,
+		"Game Variant": hs.GameVariant,
+	}).Info("Recieved handshake")
+	return nil
+}
+
+func (s *Server) SendHandshake(p *Peer) error {
+	hs := &Handshake{
+		Version:     s.Version,
+		GameVariant: s.GameVariant,
+	}
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(hs); err != nil {
+		return err
+	}
+	return p.Send(buf.Bytes())
 }
 
 func (s *Server) loop() {
 	for {
 		select {
-		case peer := <-s.addPeer:
+		case peer := <-s.delPeer:
+			logrus.WithFields(logrus.Fields{
+				"addr": peer.conn.RemoteAddr(),
+			}).Info("player disconnected")
+			delete(s.peers, peer.conn.RemoteAddr())
 
+		case peer := <-s.addPeer:
+			s.SendHandshake(peer)
+			if err := s.handshake(peer); err != nil {
+				logrus.Errorf("handshake with incoming player failed %s", err.Error())
+				continue
+			}
+			go peer.ReadLoop(s.msgCh)
+
+			//TODO: Check max players and other game states
+
+			logrus.WithFields(logrus.Fields{
+				"addr": peer.conn.RemoteAddr(),
+			}).Info("handshake successful: new player connected")
 			s.peers[peer.conn.RemoteAddr()] = peer
-			fmt.Println("New Player connected ", peer.conn.RemoteAddr())
+
+		case msg := <-s.msgCh:
+			if err := s.handleMessage(msg); err != nil {
+				panic(err)
+			}
 		}
 	}
+}
+func (s *Server) handleMessage(msg *Message) error {
+	fmt.Printf("%+v", msg)
+	return nil
 }
