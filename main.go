@@ -3,30 +3,47 @@ package main
 import (
 	/*	"fmt"
 		"math/rand"
-	*/"time"
 
+	*/
+	"time"
 	//deck "github.com/sabrs0/decPoker/deck"
 	p2p "github.com/sabrs0/decPoker/p2p"
 )
 
-func main() {
+func makeAndStart(addr string) *p2p.Server {
 	cfg := p2p.ServerConfig{
-		ListenAddr:  ":3000",
-		Version:     "DecPoker V1.0\n",
+		ListenAddr:  addr,
+		Version:     "DecPoker V1.0",
 		GameVariant: p2p.TexasHoldem,
 	}
 	server := p2p.NewServer(cfg)
+
 	go server.Start()
 
-	remoteCfg := p2p.ServerConfig{
-		ListenAddr: ":4000",
-		Version:    "DecPoker V1.0\n",
-	}
-	remoteServer := p2p.NewServer(remoteCfg)
-
-	go remoteServer.Start()
 	time.Sleep(time.Second)
-	remoteServer.Connect(":3000")
 
+	return server
+}
+
+func main() {
+
+	playerA := makeAndStart(":3000")
+	playerB := makeAndStart(":4000")
+	playerC := makeAndStart(":5000")
+	playerD := makeAndStart(":6000")
+
+	playerB.Connect(playerA.ListenAddr)
+	time.Sleep(2 * time.Millisecond)
+
+	playerC.Connect(playerB.ListenAddr)
+	time.Sleep(2 * time.Millisecond)
+
+	playerD.Connect(playerC.ListenAddr)
+
+	time.Sleep(2 * time.Millisecond)
+
+	playerB.Connect(playerC.ListenAddr)
+	/*	_ = playerA
+		_ = playerB*/
 	select {}
 }

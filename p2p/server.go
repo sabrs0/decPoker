@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"net"
+	"time"
 
 	logrus "github.com/sirupsen/logrus"
 )
@@ -49,10 +50,10 @@ func NewServer(cfg ServerConfig) *Server {
 	s := &Server{
 		ServerConfig: cfg,
 		peers:        make(map[net.Addr]*Peer),
-		addPeer:      make(chan *Peer),
+		addPeer:      make(chan *Peer, 10),
 		delPeer:      make(chan *Peer),
 		msgCh:        make(chan *Message),
-		gameState : NewGameState()
+		gameState:    NewGameState(),
 	}
 
 	tr := NewTCPTransport(s.ListenAddr)
@@ -70,28 +71,27 @@ func (s *Server) Start() {
 	go s.loop()
 
 	logrus.WithFields(logrus.Fields{
-		"listenAddr": s.ListenAddr,
-		"variant":    s.GameVariant,
+		"listenAddr":  s.ListenAddr,
+		"variant":     s.GameVariant,
+		"game status": s.gameState.gameStatus,
 	}).Info("server starts listening ")
 	s.transport.ListenAndAccept()
 }
+
+//server connects to other server and creates  a peer on itself and makes this peer to send handshake
 func (s *Server) Connect(addr string) error {
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
 	if err != nil {
 		return err
 	}
 	peer := &Peer{
-		conn: conn,
+		conn:     conn,
+		outbound: true,
 	}
 
 	s.addPeer <- peer
-	return peer.Send([]byte(s.Version))
+	return s.SendHandshake(peer)
 
-}
-
-type Handshake struct {
-	Version     string
-	GameVariant GameVariant
 }
 
 func (s *Server) handshake(p *Peer) error {
@@ -100,23 +100,27 @@ func (s *Server) handshake(p *Peer) error {
 		return err
 	}
 	if s.GameVariant != hs.GameVariant {
-		return fmt.Errorf("invalid game variant %s", hs.GameVariant)
+		return fmt.Errorf(" game variant does not match :%s", hs.GameVariant)
 	}
 	if s.Version != hs.Version {
 		return fmt.Errorf("invalid version %s", hs.Version)
 	}
 	logrus.WithFields(logrus.Fields{
+		"me":           s.ListenAddr,
 		"peer":         p.conn.RemoteAddr(),
 		"version":      hs.Version,
 		"Game Variant": hs.GameVariant,
+		"Game Status":  hs.GameStatus,
 	}).Info("Recieved handshake")
 	return nil
 }
 
+//Server makes peer to send handshake
 func (s *Server) SendHandshake(p *Peer) error {
 	hs := &Handshake{
 		Version:     s.Version,
 		GameVariant: s.GameVariant,
+		GameStatus:  s.gameState.gameStatus,
 	}
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(hs); err != nil {
@@ -135,13 +139,24 @@ func (s *Server) loop() {
 			delete(s.peers, peer.conn.RemoteAddr())
 
 		case peer := <-s.addPeer:
-			s.SendHandshake(peer)
 			if err := s.handshake(peer); err != nil {
 				logrus.Errorf("handshake with incoming player failed %s", err.Error())
+				peer.conn.Close()
 				continue
 			}
 			go peer.ReadLoop(s.msgCh)
 
+			if !peer.outbound {
+				if err := s.SendHandshake(peer); err != nil {
+					logrus.Errorf("failed to send handshake with peer : %s", err.Error())
+					peer.conn.Close()
+					delete(s.peers, peer.conn.RemoteAddr())
+				}
+				if err := s.SendPeerList(peer); err != nil {
+					logrus.Errorf("peerlist error : %s", err.Error())
+					continue
+				}
+			}
 			//TODO: Check max players and other game states
 
 			logrus.WithFields(logrus.Fields{
@@ -156,7 +171,49 @@ func (s *Server) loop() {
 		}
 	}
 }
+func (s *Server) SendPeerList(p *Peer) error {
+
+	peerlist := MessagePeerList{
+		Peers: make([]string, len(s.peers)),
+	}
+
+	it := 0
+	for addr := range s.peers {
+		peerlist.Peers[it] = addr.String()
+		it++
+	}
+
+	msg := NewMessage(s.ListenAddr, peerlist)
+
+	buffer := new(bytes.Buffer)
+
+	if err := gob.NewEncoder(buffer).Encode(msg); err != nil {
+		return err
+	}
+	return p.Send(buffer.Bytes())
+}
 func (s *Server) handleMessage(msg *Message) error {
-	fmt.Printf("%+v", msg)
+	logrus.WithFields(logrus.Fields{
+		"From": msg.From,
+	}).Info("recieved message")
+
+	switch v := msg.Payload.(type) {
+	case MessagePeerList:
+		return s.handlePeerList(v)
+	}
 	return nil
+}
+func (s *Server) handlePeerList(l MessagePeerList) error {
+	//Maybe gorountine
+	fmt.Printf("peerlist => %+v\n", l)
+	for i := 0; i < len(l.Peers); i++ {
+		if err := s.Connect(l.Peers[i]); err != nil {
+			logrus.Errorf("failed to dial peer %s : %s", l.Peers[i], err)
+			continue
+		}
+	}
+	return nil
+}
+func init() {
+	gob.Register(MessagePeerList{})
 }
