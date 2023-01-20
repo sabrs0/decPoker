@@ -1,11 +1,13 @@
 package main
 
 import (
-	/*	"fmt"
+	/*
 		"math/rand"
 
 	*/
+	"fmt"
 	"time"
+
 	//deck "github.com/sabrs0/decPoker/deck"
 	p2p "github.com/sabrs0/decPoker/p2p"
 )
@@ -31,19 +33,37 @@ func main() {
 	playerB := makeAndStart(":4000")
 	playerC := makeAndStart(":5000")
 	playerD := makeAndStart(":6000")
+	playerE := makeAndStart(":7000")
 
+	time.Sleep(time.Second)
 	playerB.Connect(playerA.ListenAddr)
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	playerC.Connect(playerB.ListenAddr)
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	playerD.Connect(playerC.ListenAddr)
+	time.Sleep(time.Second)
 
-	time.Sleep(2 * time.Millisecond)
+	playerE.Connect(playerD.ListenAddr)
 
-	playerB.Connect(playerC.ListenAddr)
+	time.Sleep(time.Second * 5)
+	CheckPeerList(playerA)
+	CheckPeerList(playerB)
+	CheckPeerList(playerC)
+	CheckPeerList(playerD)
+	CheckPeerList(playerE)
+	/*	time.Sleep(2 * time.Millisecond)
+
+		playerB.Connect(playerC.ListenAddr)*/
 	/*	_ = playerA
 		_ = playerB*/
 	select {}
+}
+func CheckPeerList(s *p2p.Server) {
+	fmt.Println("\nchecking ", s.ListenAddr)
+	peers := s.Peers()
+	for _, peer := range peers {
+		fmt.Println("\t", peer)
+	}
 }

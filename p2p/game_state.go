@@ -4,6 +4,8 @@ type GameStatus uint32
 
 func (g GameStatus) String() string {
 	switch g {
+	case GameStatusReady:
+		return "READY"
 	case GameStatusDealing:
 		return "DEALING"
 	case GameStatusPreFlop:
@@ -20,7 +22,8 @@ func (g GameStatus) String() string {
 }
 
 const (
-	GameStatusDealing GameStatus = iota
+	GameStatusReady GameStatus = iota
+	GameStatusDealing
 	GameStatusPreFlop
 	GameStatusFlop
 	GameStatusTurn

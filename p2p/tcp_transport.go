@@ -14,8 +14,9 @@ func Network(n NetAddr) string { return "tcp" }
 func String(n NetAddr) string  { return string(n) }
 
 type Peer struct {
-	conn     net.Conn
-	outbound bool
+	conn       net.Conn
+	outbound   bool
+	ListenAddr string
 }
 
 func (p *Peer) Send(b []byte) error {
@@ -24,16 +25,8 @@ func (p *Peer) Send(b []byte) error {
 }
 func (p *Peer) ReadLoop(msgCh chan *Message) {
 	defer p.conn.Close()
-	//buf := make([]byte, 1024)
 	for {
-		/*n, err := p.conn.Read(buf)
-		if err != nil {
-			break
-		}
-		msgCh <- &Message{
-			From:    p.conn.RemoteAddr(),
-			Payload: bytes.NewReader(buf[:n]),
-		}*/
+
 		msg := new(Message)
 		if err := gob.NewDecoder(p.conn).Decode(msg); err != nil {
 			logrus.Errorf("decode message error : %s", err)
