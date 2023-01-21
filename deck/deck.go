@@ -31,13 +31,13 @@ const (
 )
 
 type Card struct {
-	suit  Suit
-	value int
+	Suit  Suit
+	Value int
 }
 
 func (c Card) String() string {
 	var value string
-	switch c.value {
+	switch c.Value {
 	case 1:
 		value = "A"
 	case 11:
@@ -47,17 +47,17 @@ func (c Card) String() string {
 	case 13:
 		value = "K"
 	default:
-		value = strconv.Itoa(c.value)
+		value = strconv.Itoa(c.Value)
 	}
-	return fmt.Sprintf("%s %s", value, suitToUnicode(c.suit))
+	return fmt.Sprintf("%s %s", value, suitToUnicode(c.Suit))
 }
 func NewCard(s Suit, v int) Card {
 	if v > 13 {
 		panic("the value of the card cannot be more than 13")
 	}
 	return Card{
-		suit:  s,
-		value: v,
+		Suit:  s,
+		Value: v,
 	}
 }
 

@@ -19,6 +19,7 @@ type Peer struct {
 	ListenAddr string
 }
 
+//система работает таким образом, что сюда мы отправляем не абы что, а message
 func (p *Peer) Send(b []byte) error {
 	_, err := p.conn.Write(b)
 	return err
