@@ -3,7 +3,7 @@ package p2p
 import (
 	//"fmt"
 	"sync"
-	"sync/atomic"
+	atomic "sync/atomic"
 
 	"time"
 
@@ -103,8 +103,9 @@ func (g *GameState) SetPlayerStatus(addr string, status GameStatus) {
 
 // TODO: Check other read and write occurances of the GameState
 func (g *GameState) SetStatus(s GameStatus) {
-
-	oldStatus := atomic.Store((*int32)(&g.gameStatus), (int32)(s))
+	if g.gameStatus != s {
+		atomic.StoreInt32((*int32)(&g.gameStatus), (int32)(s))
+	}
 
 }
 func (g *GameState) AddPlayer(addr string, status GameStatus) {
@@ -137,6 +138,7 @@ func (g *GameState) loop() {
 	for x := range ticker.C {
 		_ = x
 		logrus.WithFields(logrus.Fields{
+			"we":                g.listenAddr,
 			"players connected": g.LenPlayersConnectedWithLock(),
 			"status":            g.gameStatus,
 		}).Info("CHECKK")
