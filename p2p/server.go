@@ -39,12 +39,12 @@ type Server struct {
 	ServerConfig
 
 	transport   *TCPTransport
-	peers       map[net.Addr]*Peer
+	peers       map[string]*Peer
 	addPeer     chan *Peer
 	delPeer     chan *Peer
 	msgCh       chan *Message
 	peerLock    sync.RWMutex
-	broadcastCh chan any
+	broadcastCh chan BroadCastTo
 
 	gameState *GameState
 }
@@ -52,11 +52,11 @@ type Server struct {
 func NewServer(cfg ServerConfig) *Server {
 	s := &Server{
 		ServerConfig: cfg,
-		peers:        make(map[net.Addr]*Peer),
+		peers:        make(map[string]*Peer),
 		addPeer:      make(chan *Peer, 10),
 		delPeer:      make(chan *Peer),
-		msgCh:        make(chan *Message),
-		broadcastCh:  make(chan any),
+		msgCh:        make(chan *Message, 100),
+		broadcastCh:  make(chan BroadCastTo, 100),
 	}
 	s.gameState = NewGameState(s.ListenAddr, s.broadcastCh)
 	//NOTE: JUST FOR TEST, DELETE THIS BLOCK LATER
@@ -84,17 +84,7 @@ func (s *Server) Start() {
 		"variant":     s.GameVariant,
 		"game status": s.gameState.gameStatus,
 	}).Info("server starts listening ")
-	go func() {
-		for {
-			select {
-			case msg := <-s.broadcastCh:
-				logrus.Info("BroadCasting to peers")
-				if err := s.BroadCast(msg); err != nil {
-					logrus.Errorf("broadcast error :", err)
-				}
-			}
-		}
-	}()
+
 	s.transport.ListenAndAccept()
 }
 
@@ -135,26 +125,29 @@ func (s *Server) AddPeer(p *Peer) {
 	defer s.peerLock.Unlock()
 
 	//NOTE: вощможно тут надо s.peers[p.ListenAddr] = p
-	s.peers[p.conn.RemoteAddr()] = p
+	s.peers[p.ListenAddr] = p
 
 }
 
-func (s *Server) BroadCast(payload any) error {
-	msg := NewMessage(s.ListenAddr, payload)
+func (s *Server) BroadCast(broadcastMsg BroadCastTo) error {
+	msg := NewMessage(s.ListenAddr, broadcastMsg.Payload)
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
-	for _, peer := range s.peers {
-		go func(p *Peer) {
-			if err := p.Send(buf.Bytes()); err != nil {
-				logrus.Errorf("broadCast to peer error %s", err)
-			}
-			logrus.WithFields(logrus.Fields{
-				"we":   s.ListenAddr,
-				"peer": p.ListenAddr,
-			}).Info("broadcast")
-		}(peer)
+	for _, addr := range broadcastMsg.To {
+		peer, ok := s.peers[addr]
+		if ok {
+			go func(peer *Peer) {
+				if err := peer.Send(buf.Bytes()); err != nil {
+					logrus.Errorf("broadCast to peer error :", err)
+				}
+				logrus.WithFields(logrus.Fields{
+					"we":   s.ListenAddr,
+					"peer": peer.ListenAddr,
+				}).Info("sending msg to peer")
+			}(peer)
+		}
 	}
 	return nil
 }
@@ -165,11 +158,16 @@ func (s *Server) loop() {
 
 	for {
 		select {
+		case msg := <-s.broadcastCh:
+			logrus.Info("BroadCasting to peers")
+			if err := s.BroadCast(msg); err != nil {
+				logrus.Errorf("broadcast error :", err)
+			}
 		case peer := <-s.delPeer:
 			logrus.WithFields(logrus.Fields{
 				"addr": peer.conn.RemoteAddr(),
 			}).Info("player disconnected")
-			delete(s.peers, peer.conn.RemoteAddr())
+			delete(s.peers, peer.conn.RemoteAddr().String())
 
 		case peer := <-s.addPeer:
 			if err := s.handleNewPeer(peer); err != nil {
@@ -187,7 +185,7 @@ func (s *Server) handleNewPeer(peer *Peer) error {
 	hs, err := s.handshake(peer)
 	if err != nil {
 		peer.conn.Close()
-		delete(s.peers, peer.conn.RemoteAddr())
+		delete(s.peers, peer.conn.RemoteAddr().String())
 
 		return fmt.Errorf("handshake with incoming player failed %s", err.Error())
 
@@ -200,7 +198,7 @@ func (s *Server) handleNewPeer(peer *Peer) error {
 		if err := s.SendHandshake(peer); err != nil {
 
 			peer.conn.Close()
-			delete(s.peers, peer.conn.RemoteAddr())
+			delete(s.peers, peer.conn.RemoteAddr().String())
 			return fmt.Errorf("failed to send handshake with peer : %s", err.Error())
 		}
 		go func() {
@@ -296,13 +294,14 @@ func (s *Server) handleMessage(msg *Message) error {
 	switch v := msg.Payload.(type) {
 	case MessagePeerList:
 		return s.handlePeerList(v)
-	case MessageCards:
+	case MessageEncDeck:
 		logrus.WithFields(logrus.Fields{
 			"we":           s.ListenAddr,
 			"message from": msg.From,
 			"cards":        v.Deck,
-		}).Info("Recieved cards")
+		}).Info("Recieved enc deck")
 		s.gameState.SetStatus(GameStatusRecievingCards)
+		s.gameState.ShuffleAndEncrypt(s.ListenAddr, v.Deck)
 	default:
 		fmt.Println("unknown")
 	}
@@ -325,5 +324,5 @@ func (s *Server) handlePeerList(l MessagePeerList) error {
 }
 func init() {
 	gob.Register(MessagePeerList{})
-	gob.Register(MessageCards{})
+	gob.Register(MessageEncDeck{})
 }

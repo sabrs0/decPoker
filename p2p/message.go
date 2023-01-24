@@ -1,12 +1,12 @@
 package p2p
 
-import (
-	"github.com/sabrs0/decPoker/deck"
-)
-
 type Message struct {
 	Payload any
 	From    string
+}
+type BroadCastTo struct {
+	To      []string
+	Payload any
 }
 
 func NewMessage(from string, Payload any) *Message {
@@ -27,6 +27,6 @@ type MessagePeerList struct {
 	Peers []string
 }
 
-type MessageCards struct {
-	Deck deck.Deck
+type MessageEncDeck struct {
+	Deck [][]byte
 }
