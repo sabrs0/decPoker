@@ -1,7 +1,7 @@
 package p2p
 
 import (
-	//"fmt"
+	"fmt"
 	"sync"
 	atomic "sync/atomic"
 
@@ -11,7 +11,8 @@ import (
 )
 
 type Player struct {
-	Status GameStatus
+	Status     GameStatus
+	ListenAddr string
 }
 
 type GameState struct {
@@ -20,6 +21,7 @@ type GameState struct {
 	gameStatus             GameStatus //sould be atomic accessable
 	playerLock             sync.RWMutex
 	PlayersWaitingForCards int32
+	playersList            []*Player
 	players                map[string]*Player
 	broadCastCh            chan BroadCastTo
 	DecksRecieved          map[string]bool
@@ -58,8 +60,11 @@ func (g *GameState) CheckNeedDealCards() {
 func (g *GameState) GetPlayersWithStatus(s GameStatus) []string {
 
 	players := []string{}
-	for addr := range g.players {
-		players = append(players, addr)
+	for addr, player := range g.players {
+		if player.Status == s {
+			players = append(players, addr)
+		}
+
 	}
 	return players
 }
@@ -76,38 +81,44 @@ func (g *GameState) SendToPlayerWithStatus(payload any, s GameStatus) {
 	}).Info("sending to players ")
 }
 
+func (g *GameState) ShuffleAndEncrypt(from string, deck [][]byte) error {
+
+	dealToPlayer := g.playersList[1]
+
+	logrus.WithFields(logrus.Fields{
+		"from":           from,
+		"we":             g.listenAddr,
+		"deal to player": dealToPlayer.ListenAddr,
+	}).Info("recieved cards and going to shuffle")
+	//TODO: Get this player out of determenistic list
+	//TODO: Shuffle and Deal
+
+	fmt.Println(dealToPlayer)
+	return nil
+}
+
+func (g *GameState) InitiateAndDealCards() {
+	dealToPlayer := g.playersList[0]
+
+	g.SendToPlayer(dealToPlayer.ListenAddr, MessageEncDeck{Deck: [][]byte{}})
+	g.SetStatus(GameStatusShuffleAndDeal)
+
+}
+
+func (g *GameState) SendToPlayer(addr string, payload any) {
+	g.broadCastCh <- BroadCastTo{
+		Payload: payload,
+		To:      []string{addr},
+	}
+	logrus.WithFields(logrus.Fields{
+		"payload": payload,
+		"player":  addr,
+	}).Info("sending to players ")
+}
 func (g *GameState) setDecksRecieved(from string) {
 	g.DecksRecievedLock.Lock()
 	g.DecksRecieved[from] = true
 	g.DecksRecievedLock.Unlock()
-}
-func (g *GameState) ShuffleAndEncrypt(from string, deck [][]byte) error {
-
-	g.setDecksRecieved(from)
-
-	//encryption and shuffle
-
-	g.DecksRecievedLock.RLock()
-	defer g.DecksRecievedLock.RUnlock()
-	//g.playerLock.RLock()
-	players := g.GetPlayersWithStatus(GameStatusRecievingCards)
-	//g.playerLock.RUnlock()
-	for _, addr := range players {
-		if _, ok := g.DecksRecieved[addr]; !ok {
-			return nil
-		}
-		//g.playerLock.Lock()
-		//g.SetPlayerStatus(addr, GameStatusRecievingCards)
-		//g.playerLock.Unlock()
-	}
-	g.SendToPlayerWithStatus(MessageEncDeck{Deck: [][]byte{}}, GameStatusWaiting)
-	//broadcast
-	return nil
-}
-func (g *GameState) InitiateAndDealCards() {
-	g.SetStatus(GameStatusRecievingCards)
-
-	g.SendToPlayerWithStatus(MessageEncDeck{Deck: [][]byte{}}, GameStatusWaiting)
 }
 
 func (g *GameState) DealCards() {
@@ -141,7 +152,11 @@ func (g *GameState) AddPlayer(addr string, status GameStatus) {
 		g.AddPlayerWaitingForCards()
 	}
 
-	g.players[addr] = new(Player)
+	player := &Player{
+		ListenAddr: addr,
+	}
+	g.players[addr] = player
+	g.playersList = append(g.playersList, player)
 	//g.CheckNeedDealCards()
 	//Set the player's status also when we add ther player
 	g.SetPlayerStatus(addr, status)
