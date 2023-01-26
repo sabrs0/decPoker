@@ -307,7 +307,6 @@ func (s *Server) handleEncDeck(from string, msg MessageEncDeck) error {
 		"message from": from,
 		"cards":        msg.Deck,
 	}).Info("Recieved enc deck")
-	//s.gameState.SetStatus(GameStatusRecievingCards)
 	return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
 }
 
