@@ -30,9 +30,10 @@ const (
 )
 
 type ServerConfig struct {
-	Version     string
-	ListenAddr  string
-	GameVariant GameVariant
+	Version       string
+	ListenAddr    string
+	GameVariant   GameVariant
+	ApiListenAddr string
 }
 
 type Server struct {
@@ -45,8 +46,8 @@ type Server struct {
 	msgCh       chan *Message
 	peerLock    sync.RWMutex
 	broadcastCh chan BroadCastTo
-
-	gameState *GameState
+	//gameState *GameState
+	gameState *Game
 }
 
 func NewServer(cfg ServerConfig) *Server {
@@ -58,11 +59,12 @@ func NewServer(cfg ServerConfig) *Server {
 		msgCh:        make(chan *Message, 100),
 		broadcastCh:  make(chan BroadCastTo, 100),
 	}
-	s.gameState = NewGameState(s.ListenAddr, s.broadcastCh)
+	/*s.gameState = NewGameState(s.ListenAddr, s.broadcastCh)
 	//NOTE: JUST FOR TEST, DELETE THIS BLOCK LATER
 	if s.ListenAddr == ":3000" {
 		s.gameState.isDealer = true
-	}
+	}*/
+	s.gameState = NewGame(s.ListenAddr, s.broadcastCh)
 
 	tr := NewTCPTransport(s.ListenAddr)
 
@@ -70,6 +72,16 @@ func NewServer(cfg ServerConfig) *Server {
 
 	tr.AddPeer = s.addPeer
 	tr.DelPeer = s.delPeer
+
+	go func(s *Server) {
+		apiServer := NewAPIServer(s.ApiListenAddr, s.gameState)
+		logrus.WithFields(logrus.Fields{
+			"api Addr": s.ApiListenAddr,
+		}).Info("starting API Server")
+
+		apiServer.Run()
+
+	}(s)
 
 	return s
 
@@ -80,9 +92,9 @@ func (s *Server) Start() {
 
 	//go s.gameState.loop()
 	logrus.WithFields(logrus.Fields{
-		"listenAddr":  s.ListenAddr,
-		"variant":     s.GameVariant,
-		"game status": s.gameState.gameStatus,
+		"listenAddr": s.ListenAddr,
+		"variant":    s.GameVariant,
+		//"game status": s.gameState.gameStatus,
 	}).Info("server starts listening ")
 
 	s.transport.ListenAndAccept()
@@ -145,7 +157,7 @@ func (s *Server) BroadCast(broadcastMsg BroadCastTo) error {
 				logrus.WithFields(logrus.Fields{
 					"we":   s.ListenAddr,
 					"peer": peer.ListenAddr,
-				}).Info("sending msg to peer")
+				}).Info("server broadcast : sending msg to peer")
 			}(peer)
 		}
 	}
@@ -159,7 +171,7 @@ func (s *Server) loop() {
 	for {
 		select {
 		case msg := <-s.broadcastCh:
-			logrus.Info("BroadCasting to peers")
+			logrus.Info("server BroadCasting to peers")
 			if err := s.BroadCast(msg); err != nil {
 				logrus.Errorf("broadcast error :", err)
 			}
@@ -220,7 +232,7 @@ func (s *Server) handleNewPeer(peer *Peer) error {
 	}).Info("Recieved handshake")
 
 	s.AddPeer(peer)
-	s.gameState.AddPlayer(peer.ListenAddr, hs.GameStatus)
+	s.gameState.AddPlayer(peer.ListenAddr)
 	return nil
 }
 func (s *Server) handshake(p *Peer) (*Handshake, error) {
@@ -243,7 +255,7 @@ func (s *Server) SendHandshake(p *Peer) error {
 	hs := &Handshake{
 		Version:     s.Version,
 		GameVariant: s.GameVariant,
-		GameStatus:  s.gameState.gameStatus,
+		GameStatus:  s.gameState.currentStatus,
 		ListenAddr:  s.ListenAddr,
 	}
 	buf := new(bytes.Buffer)
@@ -295,19 +307,13 @@ func (s *Server) handleMessage(msg *Message) error {
 	case MessagePeerList:
 		return s.handlePeerList(v)
 	case MessageEncDeck:
-		return s.handleEncDeck(msg.From, v)
+		return s.handleMsgEncDeck(msg.From, v)
+	case MessageReady:
+		return s.handleMsgReady(msg.From)
 	default:
 		fmt.Println("unknown")
 	}
 	return nil
-}
-func (s *Server) handleEncDeck(from string, msg MessageEncDeck) error {
-	logrus.WithFields(logrus.Fields{
-		"we":           s.ListenAddr,
-		"message from": from,
-		"cards":        msg.Deck,
-	}).Info("Recieved enc deck")
-	return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
 }
 
 func (s *Server) handlePeerList(l MessagePeerList) error {
@@ -325,7 +331,28 @@ func (s *Server) handlePeerList(l MessagePeerList) error {
 	}
 	return nil
 }
+
+func (s *Server) handleMsgEncDeck(from string, msg MessageEncDeck) error {
+	logrus.WithFields(logrus.Fields{
+		"we":           s.ListenAddr,
+		"message from": from,
+		"cards":        msg.Deck,
+	}).Info("handling enc deck message")
+	return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
+
+}
+
+func (s *Server) handleMsgReady(from string) error {
+	logrus.WithFields(logrus.Fields{
+		"we":           s.ListenAddr,
+		"message from": from,
+	}).Info("handling ready message")
+	s.gameState.setPlayerReady(from)
+	//return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
+	return nil
+}
 func init() {
 	gob.Register(MessagePeerList{})
 	gob.Register(MessageEncDeck{})
+	gob.Register(MessageReady{})
 }
