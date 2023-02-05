@@ -12,6 +12,55 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type PlayerAction byte
+
+const (
+	PlayerActionFold PlayerAction = iota + 1
+	PlayerActionCheck
+	PlayerActionBet
+)
+
+/*
+
+
+
+
+
+
+
+
+
+
+ */
+type PlayersList []string
+
+func (list PlayersList) Len() int { return len(list) }
+
+func (list PlayersList) Swap(i, j int) {
+	list[i], list[j] = list[j], list[i]
+}
+
+func (list PlayersList) Less(i, j int) bool {
+	portI, _ := strconv.Atoi(list[i][1:])
+	portJ, _ := strconv.Atoi(list[j][1:])
+
+	return portI < portJ
+}
+
+/*
+
+
+
+
+
+
+
+
+
+
+ */
+
+// TODO: may be use player list instead
 type PlayersReady struct {
 	mu           sync.RWMutex
 	recvStatuses map[string]bool
@@ -28,11 +77,6 @@ func (pr *PlayersReady) addRecvStatus(from string) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	pr.recvStatuses[from] = true
-}
-
-func (pr *PlayersReady) haveRecv(from string) bool {
-	_, ok := pr.recvStatuses[from]
-	return ok
 }
 
 func (pr *PlayersReady) len() int {
@@ -58,7 +102,11 @@ type Game struct {
 	broadCastCh chan BroadCastTo
 	//currentStatus should be atomically accessable
 	currentStatus GameStatus
+	//currentDealer should be atomically accessable
 	currentDealer int32
+
+	//currentPlayerTurn should be atomically accessable
+	currentPlayerTurn int32
 }
 
 func NewGame(addr string, bc chan BroadCastTo) *Game {
@@ -76,6 +124,14 @@ func NewGame(addr string, bc chan BroadCastTo) *Game {
 	return g
 }
 
+func (g *Game) Fold() {
+	g.SetStatus(GameStatusFolded)
+	g.SendToPlayers(MessagePlayerAction{
+		CurrentAction:     PlayerActionFold,
+		CurrentGameStatus: g.currentStatus,
+	}, g.getOtherPlayers()...)
+}
+
 /*
 
 
@@ -89,6 +145,8 @@ func (g *Game) ShuffleAndEncrypt(from string, deck [][]byte) error {
 	}
 	_, isDealer := g.getCurrentDealerAddr()
 	if isDealer && from == prevPlayerAddr {
+		g.SetStatus(GameStatusPreFlop)
+		g.SendToPlayers(MessagePreFlop{}, g.getOtherPlayers()...)
 		logrus.Info("end of round")
 		return nil
 	}
@@ -210,6 +268,7 @@ func (g *Game) loop() {
 		_ = x
 		curDealer, _ := g.getCurrentDealerAddr()
 		logrus.WithFields(logrus.Fields{
+			"action":            PlayerActionFold,
 			"we":                g.listenAddr,
 			"players connected": g.playersList,
 			"status":            g.currentStatus,
@@ -275,224 +334,3 @@ func (g *Game) GetNextPosOnTable() int {
 }*/
 
 //NOTE: RECURSION
-func (g *Game) GetNextReadyPlayer(pos int) string {
-	nextPos := (pos + 1) % g.playersList.Len() // g.GetNextPosOnTable()
-	nextPlayerAddr := g.playersList[nextPos]
-	if g.playersReady.haveRecv(nextPlayerAddr) {
-		return nextPlayerAddr
-	}
-	return g.GetNextReadyPlayer(pos + 1)
-}
-
-//for {
-//	<-ticker.C
-//	logrus.WithFields(logrus.Fields{
-//		"we":                g.listenAddr,
-//		"players connected": g.playersList,
-//		"status":            g.gameStatus,
-//	}).Info("CHECKK")
-//}
-
-/*
-type GameState struct {
-	listenAddr string
-	isDealer   bool       //sould be atomic accessable
-	gameStatus GameStatus //sould be atomic accessable
-	playerLock sync.RWMutex
-	//PlayersWaitingForCards int32
-	playersList PlayerList
-	players     map[string]*Player
-	broadCastCh chan BroadCastTo
-}
-
-func NewGameState(addr string, bch chan BroadCastTo) *GameState {
-	g := &GameState{
-		listenAddr:  addr,
-		isDealer:    false,
-		gameStatus:  GameStatusWaiting,
-		players:     make(map[string]*Player),
-		broadCastCh: bch,
-	}
-	g.AddPlayer(addr, GameStatusWaiting)
-
-	go g.loop()
-	return g
-
-}
-
-//func (g *GameState) AddPlayerWaitingForCards() {
-//	atomic.AddInt32(&g.PlayersWaitingForCards, 1)
-//}
-
-func (g *GameState) CheckNeedDealCards() {
-	//playersWaiting := atomic.LoadInt32(&g.PlayersWaitingForCards)
-	playersWaiting := g.playersWaitingForCards()
-	if playersWaiting == len(g.players) &&
-		g.isDealer && g.gameStatus == GameStatusWaiting {
-
-		logrus.WithFields(logrus.Fields{
-			"addr": g.listenAddr,
-		}).Info("Need to deal Cards")
-
-		g.InitiateAndDealCards()
-
-	}
-
-}
-
-func (g *GameState) playersWaitingForCards() int {
-	totalPlayers := 0
-	for i := 0; i < len(g.playersList); i++ {
-		if g.playersList[i].Status == GameStatusWaiting {
-			totalPlayers++
-		}
-	}
-	return totalPlayers
-}
-
-func (g *GameState) GetPlayersWithStatus(s GameStatus) []string {
-
-	players := []string{}
-
-	for addr, player := range g.players {
-		if player.Status == s {
-			players = append(players, addr)
-		}
-
-	}
-	return players
-}
-
-
-func (g *GameState) ShuffleAndEncrypt(from string, deck [][]byte) error {
-	g.SetPlayerStatus(from, GameStatusShuffleAndDeal)
-
-	prevPlayer := g.playersList[g.GetPrevPosOnTable()]
-	if g.isDealer && from == prevPlayer.ListenAddr {
-		logrus.Info("end of round")
-		return nil
-	}
-
-	dealToPlayer := g.playersList[g.GetNextPosOnTable()]
-	logrus.WithFields(logrus.Fields{
-		"from":           from,
-		"we":             g.listenAddr,
-		"deal to player": dealToPlayer.ListenAddr,
-	}).Info("recieved cards and going to shuffle")
-
-	//TODO: Get this player out of determenistic list
-	//TODO: Shuffle and Deal
-
-	g.SendToPlayer(dealToPlayer.ListenAddr, MessageEncDeck{Deck: [][]byte{}})
-	g.SetStatus(GameStatusShuffleAndDeal)
-
-	fmt.Printf("%s => Setting my own status %s\n", g.listenAddr, GameStatusShuffleAndDeal)
-
-	return nil
-}
-
-func (g *Game) InitiateAndDealCards() {
-	dealToPlayer := g.playersList[g.GetNextPosOnTable()]
-
-	g.SetStatus(GameStatusShuffleAndDeal)
-	g.SendToPlayer(dealToPlayer.ListenAddr, MessageEncDeck{Deck: [][]byte{}})
-
-}
-
-func (g *GameState) SendToPlayer(addr string, payload any) {
-	g.broadCastCh <- BroadCastTo{
-		Payload: payload,
-		To:      []string{addr},
-	}
-	logrus.WithFields(logrus.Fields{
-		"payload": payload,
-		"player":  addr,
-	}).Info("sending to players ")
-}
-
-func (g *GameState) SetPlayerStatus(addr string, status GameStatus) {
-
-	player, ok := g.players[addr]
-	if !ok {
-		panic("player could not be found, although it should exit")
-	}
-	player.Status = status
-
-	g.CheckNeedDealCards()
-}
-
-// TODO: Check other read and write occurances of the GameState
-func (g *GameState) SetStatus(s GameStatus) {
-	if g.gameStatus != s {
-		atomic.StoreInt32((*int32)(&g.gameStatus), (int32)(s))
-
-		g.SetPlayerStatus(g.listenAddr, s)
-	}
-
-}
-func (g *GameState) AddPlayer(addr string, status GameStatus) {
-
-	g.playerLock.Lock()
-	defer g.playerLock.Unlock()
-
-	///f status == GameStatusWaiting {
-	//	g.AddPlayerWaitingForCards()
-	//}
-
-	player := &Player{
-		ListenAddr: addr,
-	}
-	g.players[addr] = player
-	g.playersList = append(g.playersList, player)
-	sort.Sort(g.playersList)
-
-	//Set the player's status also when we add ther player
-
-	g.SetPlayerStatus(addr, status)
-	logrus.WithFields(logrus.Fields{
-		"addr":   addr,
-		"status": status,
-		"we":     g.listenAddr,
-	}).Info("New PLayer Joined")
-}
-
-
-*/
-type PlayersList []string
-
-func (list PlayersList) Len() int { return len(list) }
-
-func (list PlayersList) Swap(i, j int) {
-	list[i], list[j] = list[j], list[i]
-}
-
-func (list PlayersList) Less(i, j int) bool {
-	portI, _ := strconv.Atoi(list[i][1:])
-	portJ, _ := strconv.Atoi(list[j][1:])
-
-	return portI < portJ
-}
-
-/*type Player struct {
-	Status     GameStatus
-	ListenAddr string
-}
-
-func (p *Player) String() string {
-	return fmt.Sprintf("%s => %s", p.ListenAddr, p.Status)
-}
-
-type PlayerList []*Player
-
-func (list PlayerList) Len() int { return len(list) }
-
-func (list PlayerList) Swap(i, j int) {
-	list[i], list[j] = list[j], list[i]
-}
-
-func (list PlayerList) Less(i, j int) bool {
-	portI, _ := strconv.Atoi(list[i].ListenAddr[1:])
-	portJ, _ := strconv.Atoi(list[j].ListenAddr[1:])
-
-	return portI < portJ
-}*/

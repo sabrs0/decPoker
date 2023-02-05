@@ -44,6 +44,9 @@ func main() {
 		time.Sleep(time.Second * 3)
 		http.Get("http://localhost:8081/ready")
 
+		time.Sleep(time.Second * 8)
+		http.Get("http://localhost:8081/fold")
+
 	}()
 
 	time.Sleep(time.Millisecond * 200)

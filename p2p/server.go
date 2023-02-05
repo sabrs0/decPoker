@@ -310,6 +310,10 @@ func (s *Server) handleMessage(msg *Message) error {
 		return s.handleMsgEncDeck(msg.From, v)
 	case MessageReady:
 		return s.handleMsgReady(msg.From)
+	case MessagePreFlop:
+		return s.handleMsgPreFlop(msg.From)
+	case MessagePlayerAction:
+		return s.handleMsgPlayerAction(msg.From, v)
 	default:
 		fmt.Println("unknown")
 	}
@@ -351,8 +355,28 @@ func (s *Server) handleMsgReady(from string) error {
 	//return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
 	return nil
 }
+func (s *Server) handleMsgPreFlop(from string) error {
+	logrus.WithFields(logrus.Fields{
+		"we":           s.ListenAddr,
+		"message from": from,
+	}).Info("handling ready message")
+	s.gameState.SetStatus(GameStatusPreFlop)
+	//return s.gameState.ShuffleAndEncrypt(from, msg.Deck)
+	return nil
+}
+
+func (s *Server) handleMsgPlayerAction(from string, msg MessagePlayerAction) error {
+	logrus.WithFields(logrus.Fields{
+		"we":                  s.ListenAddr,
+		"message from":        from,
+		"Player Action stuff": msg,
+	}).Info("handling Player Action message")
+	return nil
+}
 func init() {
 	gob.Register(MessagePeerList{})
 	gob.Register(MessageEncDeck{})
 	gob.Register(MessageReady{})
+	gob.Register(MessagePreFlop{})
+	gob.Register(MessagePlayerAction{})
 }

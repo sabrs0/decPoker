@@ -1,0 +1,2 @@
+- make sure we deal only to the players that have ready status
+- fix possible data race condition where multiple of the same addresses are in the playerList

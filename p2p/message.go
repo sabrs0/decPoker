@@ -37,3 +37,20 @@ type MessageReady struct {
 func (msg MessageReady) String() string {
 	return "MSG : ready"
 }
+
+type MessagePreFlop struct {
+}
+
+func (msg MessagePreFlop) String() string {
+	return "MSG : PreFlop"
+}
+
+type MessagePlayerAction struct {
+	// current status is the status of the player sending his game
+	// it needs to be exact the same as ours
+	CurrentGameStatus GameStatus
+	// action is the action player willing to take
+	CurrentAction PlayerAction
+	//the value of the bet if any
+	Value int
+}
